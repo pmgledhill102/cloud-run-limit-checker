@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"strconv"
@@ -201,7 +202,14 @@ func pingAll(services []serviceInfo, concurrency int) []result {
 
 func pingService(svc serviceInfo) result {
 	url := svc.URI + "/ping"
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := &http.Client{
+		Timeout: 30 * time.Second,
+		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+				return (&net.Dialer{Timeout: 10 * time.Second}).DialContext(ctx, "tcp4", addr)
+			},
+		},
+	}
 
 	resp, err := client.Get(url)
 	if err != nil {
