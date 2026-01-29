@@ -78,13 +78,34 @@ ensure_target_vm() {
       --tags=target-service \
       --quiet
     ok "Created VM: ${VM_NAME}"
+
+    info "Waiting for VM to become reachable via IAP..."
+    local attempt=0
+    until gcloud compute ssh "$VM_NAME" \
+            --zone="$ZONE" --tunnel-through-iap --quiet \
+            --command='true' &>/dev/null; do
+      (( attempt++ ))
+      if (( attempt > 30 )); then
+        err "VM did not become reachable via IAP after 30 attempts"
+        exit 1
+      fi
+      sleep 5
+    done
+    ok "VM reachable via IAP"
   fi
 
   info "Copying target binary to VM via IAP"
-  gcloud compute scp "$ROOT_DIR/target/target-bin" "${VM_NAME}:~/target" \
-    --zone="$ZONE" \
-    --tunnel-through-iap \
-    --quiet
+  local attempt=0
+  until gcloud compute scp "$ROOT_DIR/target/target-bin" "${VM_NAME}:~/target" \
+          --zone="$ZONE" --tunnel-through-iap --quiet 2>/dev/null; do
+    (( attempt++ ))
+    if (( attempt > 12 )); then
+      err "SCP failed after ${attempt} attempts"
+      exit 1
+    fi
+    warn "SCP attempt ${attempt} failed, retrying in 10s..."
+    sleep 10
+  done
   ok "Binary copied"
 
   info "Starting target service on VM"
