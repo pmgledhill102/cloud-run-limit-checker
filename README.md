@@ -38,12 +38,12 @@ The project consists of four components:
    Because it runs inside the VPC, it can reach the internal-only Cloud Run
    services directly.
 
-4. **Deployment orchestrator** (Go, runs locally) -- A CLI tool that uses the
-   Google Cloud Go SDK to programmatically deploy all Cloud Run services and the
-   checker job via the Cloud Run Admin API (which works regardless of ingress
-   settings). After deployment, it executes the checker job, polls until the job
-   completes, then reads the job's logs from Cloud Logging to produce a
-   verification report.
+4. **Deploy/wipe scripts** (Bash, runs locally) -- Two shell scripts that use
+   `gcloud` commands to manage the full lifecycle. `deploy.sh` builds container
+   images with Cloud Build, deploys N Cloud Run services in batches, creates the
+   checker job, and executes it. `wipe.sh` discovers all deployed services by
+   prefix, deletes them in batches, removes the checker job, and optionally
+   cleans up the Artifact Registry repo.
 
 ## Network Architecture
 
@@ -92,13 +92,13 @@ The project consists of four components:
 
 Local machine
 +------------------------------------------+
-| Deployment orchestrator                  |
-| (Go CLI using Cloud SDK)                 |
+| deploy.sh / wipe.sh                     |
+| (Bash scripts using gcloud CLI)         |
 |                                          |
-| - Deploys N services (Admin API)         |
-| - Executes checker job (Admin API)       |
-| - Polls for job completion               |
-| - Reads job logs for results             |
+| - Builds images (Cloud Build)           |
+| - Deploys N services (gcloud run)       |
+| - Creates & executes checker job        |
+| - Deletes services & job on wipe        |
 +------------------------------------------+
 ```
 
@@ -109,23 +109,22 @@ Local machine
    subnet, and Compute Engine
    VM running the target service are set up before running the orchestrator.
 
-2. **Deploy** -- The orchestrator iterates from 1 to N, deploying a Cloud Run
-   service for each iteration via the Cloud Run Admin API. All services use the
-   same container image but receive a unique name. Each is configured with
-   internal-only ingress, Direct VPC egress pointing at the shared subnet,
-   min/max instances of 1, and the smallest available resource allocation.
+2. **Deploy** -- `deploy.sh` builds container images via Cloud Build, then
+   deploys N Cloud Run services in batches using `gcloud run deploy`. All
+   services use the same container image but receive a unique name. Each is
+   configured with internal-only ingress, Direct VPC egress pointing at the
+   shared subnet, and min-instances=0, max-instances=1.
 
-3. **Verify** -- The orchestrator executes the checker Cloud Run Job, which runs
-   inside the VPC. The checker lists all deployed services matching the naming
-   prefix, calls each one's `/ping` endpoint via its internal URL, and logs the
-   result for each service to stdout. Each pinged service proves its VPC
-   connectivity by calling the target VM over its private IP.
+3. **Verify** -- `deploy.sh` creates (or updates) the checker Cloud Run Job
+   and executes it with `--wait`. The checker runs inside the VPC, lists all
+   deployed services matching the naming prefix, calls each one's `/ping`
+   endpoint via its internal URL, and logs the result for each service to
+   stdout. Each pinged service proves its VPC connectivity by calling the
+   target VM over its private IP.
 
-4. **Report** -- The orchestrator polls until the checker job completes, then
-   reads the job's stdout logs from Cloud Logging. It prints a summary: how many
-   services deployed successfully, how many passed the connectivity check, and
-   any errors encountered (including the specific service name and error
-   details).
+4. **Cleanup** -- `wipe.sh` discovers all services matching the prefix via
+   `gcloud run services list --filter`, deletes them in batches, removes the
+   checker job, and optionally deletes the Artifact Registry repo.
 
 ## Project Structure
 
@@ -142,11 +141,24 @@ cloud-run-limit-checker/
     Dockerfile
   target/                    # Internal Compute Engine target service (Go)
     main.go
-  orchestrator/              # Deployment orchestrator CLI (Go)
-    main.go
+  scripts/                   # Deploy and wipe bash scripts
+    common.sh                # Shared defaults, flag parsing, helpers
+    deploy.sh                # Build, deploy services, run checker
+    wipe.sh                  # Delete services, job, and optionally repo
 ```
 
 ## Quick Start
+
+```bash
+# Deploy 10 services and run the checker
+./scripts/deploy.sh --target-url http://10.0.0.x:8080/log
+
+# Deploy more services, skip rebuilding images
+./scripts/deploy.sh --target-url http://10.0.0.x:8080/log --count 50 --skip-build
+
+# Delete everything
+./scripts/wipe.sh --yes
+```
 
 See [docs/technical-design.md](docs/technical-design.md) for detailed setup
 instructions, configuration options, and iteration plan.

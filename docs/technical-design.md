@@ -122,55 +122,59 @@ service has working connectivity to the target VM.
 - Task timeout set high enough to check all services (e.g. 30 minutes).
 - 1 task, 0 retries (the orchestrator handles re-runs if needed).
 
-### 4. Deployment Orchestrator (`orchestrator/`)
+### 4. Deploy and Wipe Scripts (`scripts/`)
 
-A Go CLI application that runs on the developer's local machine.
+Two bash scripts that use `gcloud` commands to manage the full lifecycle. A
+shared `common.sh` file provides defaults, flag parsing, and helper functions.
 
-**Responsibilities:**
+**`deploy.sh`** -- builds, deploys, and verifies:
+1. Creates an Artifact Registry repo (idempotent).
+2. Builds service and checker images via `gcloud builds submit`.
+3. Deploys N services in batches of 50 using background `gcloud run deploy`
+   commands with 1-second stagger. Each service is configured with internal
+   ingress, Direct VPC egress, min-instances=0, max-instances=1, and
+   `--allow-unauthenticated`.
+4. Creates or updates the checker Cloud Run Job with the appropriate env vars.
+5. Executes the checker with `gcloud run jobs execute --wait`.
 
-1. **Build and push the container image** -- Builds the Cloud Run service
-   container and pushes it to Artifact Registry (or uses Cloud Build).
-2. **Deploy Cloud Run services** -- Iterates from 1 to N, creating each service
-   with the Cloud Run Admin API v2 via the Go SDK. The Admin API is a management
-   plane API and works regardless of the service's ingress setting. Each service
-   is configured with:
-   - A unique name: `service-001`, `service-002`, ... `service-NNN`
-   - The shared container image
-   - **Internal-only ingress** (`ingress: INGRESS_TRAFFIC_INTERNAL_ONLY`)
-   - Direct VPC egress to the specified subnet
-   - `min-instances=1`, `max-instances=1`
-   - 128Mi memory, 0.08 vCPU
-   - Environment variables: `TARGET_URL` and `SERVICE_NAME`
-3. **Execute checker job** -- After all services are deployed, the orchestrator
-   creates (or updates) and executes the checker Cloud Run Job. The job runs
-   inside the VPC, calls `/ping` on each service, and logs results to stdout.
-4. **Poll and report** -- The orchestrator polls the job execution status until
-   it completes, then reads the job's stdout logs from Cloud Logging via the
-   Logging API. It prints a summary table showing deployment and connectivity
-   status for each service, plus aggregate counts (deployed, passed, failed).
-5. **Teardown** -- Provides a `--cleanup` flag that deletes all services and
-   the checker job matching the naming pattern.
+**`wipe.sh`** -- discovers and deletes:
+1. Discovers services via `gcloud run services list --filter`.
+2. Deletes services in batches (background jobs, 1-second stagger).
+3. Deletes the checker job.
+4. Optionally deletes the Artifact Registry repo (`--delete-repo`).
+5. Requires confirmation unless `--yes` is passed.
 
-**CLI flags:**
-| Flag              | Description                                      | Default            |
-|-------------------|--------------------------------------------------|--------------------|
-| `--region`        | GCP region                                       | (required)         |
-| `--network`       | VPC network name                                 | (required)         |
-| `--subnet`        | Subnet name                                      | (required)         |
-| `--target-url`    | Internal IP + port of the target service         | (required)         |
-| `--service-image` | Container image URI for the Cloud Run service    | (required)         |
-| `--checker-image` | Container image URI for the checker job           | (required)         |
-| `--count`         | Number of services to deploy                     | `10`               |
-| `--prefix`        | Service name prefix                              | `service`          |
-| `--concurrency`   | Number of parallel deploy operations             | `10`               |
-| `--cleanup`       | Delete all services and checker job               | `false`            |
-| `--verify-only`   | Skip deployment, only execute the checker job    | `false`            |
+**`deploy.sh` flags:**
+| Flag              | Description                                      | Default                |
+|-------------------|--------------------------------------------------|------------------------|
+| `--target-url`    | Internal IP + port of the target service         | (required)             |
+| `--project`       | GCP project                                      | `cr-limit-tests`       |
+| `--region`        | GCP region                                       | `europe-west1`         |
+| `--network`       | VPC network name                                 | `limit-checker-vpc`    |
+| `--subnet`        | Subnet name                                      | `limit-checker-subnet` |
+| `--count`         | Number of services to deploy                     | `10`                   |
+| `--prefix`        | Service name prefix                              | `service`              |
+| `--concurrency`   | Checker job concurrency env var                  | `10`                   |
+| `--batch-size`    | Deploy batch size                                | `50`                   |
+| `--skip-build`    | Skip image builds                                | `false`                |
+| `--skip-deploy`   | Skip service deployment                          | `false`                |
+| `--skip-check`    | Skip checker job execution                       | `false`                |
+
+**`wipe.sh` flags:**
+| Flag              | Description                                      | Default                |
+|-------------------|--------------------------------------------------|------------------------|
+| `--project`       | GCP project                                      | `cr-limit-tests`       |
+| `--region`        | GCP region                                       | `europe-west1`         |
+| `--prefix`        | Service name prefix                              | `service`              |
+| `--batch-size`    | Delete batch size                                | `50`                   |
+| `--delete-repo`   | Also delete the Artifact Registry repo           | `false`                |
+| `--yes`, `-y`     | Skip confirmation prompt                         | `false`                |
 
 **Concurrency:**
-Deployments are parallelised using a worker pool (bounded by `--concurrency`)
-to avoid hitting API rate limits while still completing in a reasonable time.
-Verification concurrency within the checker job is controlled by its own
-`CONCURRENCY` environment variable.
+Service deployments and deletions run as background shell jobs within each
+batch, with a 1-second stagger to avoid API rate limit spikes. Verification
+concurrency within the checker job is controlled by its `CONCURRENCY`
+environment variable.
 
 ## Manual Infrastructure Setup
 
@@ -344,23 +348,22 @@ and report results.
 **Exit criteria:** Running the checker locally (with mock data or against a small
 set of deployed services) produces structured pass/fail output to stdout.
 
-### Iteration 4: Orchestrator -- Deploy, Verify, and Cleanup
+### Iteration 4: Deploy and Wipe Scripts
 
-**Goal:** The orchestrator can deploy N Cloud Run services, execute the checker
-job, read results, and clean up.
+**Goal:** Bash scripts can deploy N Cloud Run services, execute the checker
+job, and clean up.
 
 **Tasks:**
-- Scaffold the Go CLI with flag parsing.
-- Implement Cloud Run service deployment using the Go SDK (Cloud Run Admin
-  API v2).
-- Implement checker job creation and execution.
-- Implement job polling and log reading from Cloud Logging.
-- Implement the cleanup/deletion flow.
+- Write `scripts/common.sh` with shared defaults, flag parsing, and helpers.
+- Write `scripts/deploy.sh` with image building, batched service deployment,
+  checker job creation, and execution.
+- Write `scripts/wipe.sh` with service discovery, batched deletion, and
+  optional repo cleanup.
 - Test with a small count (e.g. 5 services).
 
-**Exit criteria:** Running the orchestrator deploys 5 Cloud Run services,
-executes the checker job, and prints a summary showing all 5 passed the
-connectivity check. `--cleanup` removes all services and the job.
+**Exit criteria:** Running `deploy.sh` deploys 5 Cloud Run services, executes
+the checker job, and the checker reports all 5 passed. `wipe.sh --yes` removes
+all services and the job.
 
 ### Iteration 5: Scale Testing
 
