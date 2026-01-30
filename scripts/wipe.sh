@@ -54,7 +54,7 @@ fi
 
 info "Found ${#SERVICES[@]} service(s) and checker job exists: ${CHECKER_EXISTS}"
 
-if (( ${#SERVICES[@]} == 0 )) && [[ "$CHECKER_EXISTS" != "true" ]] && [[ "$DELETE_REPO" != "true" ]] && [[ "$DELETE_VM" != "true" ]]; then
+if [ "${#SERVICES[@]}" -eq 0 ] && [[ "$CHECKER_EXISTS" != "true" ]] && [[ "$DELETE_REPO" != "true" ]] && [[ "$DELETE_VM" != "true" ]]; then
   ok "Nothing to delete"
   exit 0
 fi
@@ -63,7 +63,7 @@ fi
 if [[ "$YES" != "true" ]]; then
   echo ""
   echo "This will delete:"
-  if (( ${#SERVICES[@]} > 0 )); then
+  if [ "${#SERVICES[@]}" -gt 0 ]; then
     echo "  - ${#SERVICES[@]} Cloud Run service(s) matching '${PREFIX}-*'"
   fi
   if [[ "$CHECKER_EXISTS" == "true" ]]; then
@@ -84,7 +84,7 @@ if [[ "$YES" != "true" ]]; then
 fi
 
 # ── Delete services in batches ────────────────────────────────────────────────
-if (( ${#SERVICES[@]} > 0 )); then
+if [ "${#SERVICES[@]}" -gt 0 ]; then
   info "Deleting ${#SERVICES[@]} service(s) (batch size: ${BATCH_SIZE})"
 
   succeeded=0
@@ -92,18 +92,18 @@ if (( ${#SERVICES[@]} > 0 )); then
   i=0
   total=${#SERVICES[@]}
 
-  while (( i < total )); do
-    batch_end=$(( i + BATCH_SIZE ))
-    if (( batch_end > total )); then
+  while [ "$i" -lt "$total" ]; do
+    batch_end=$((i + BATCH_SIZE))
+    if [ "$batch_end" -gt "$total" ]; then
       batch_end=$total
     fi
 
-    info "Batch: deleting services ${i}..$(( batch_end - 1 ))"
+    info "Batch: deleting services ${i}..$((batch_end - 1))"
 
     pids=()
     batch_names=()
     j=$i
-    while (( j < batch_end )); do
+    while [ "$j" -lt "$batch_end" ]; do
       name="${SERVICES[$j]}"
       batch_names+=("$name")
 
@@ -112,7 +112,7 @@ if (( ${#SERVICES[@]} > 0 )); then
         --quiet &
 
       pids+=($!)
-      (( j++ ))
+      j=$((j + 1))
       sleep 1
     done
 
@@ -120,12 +120,12 @@ if (( ${#SERVICES[@]} > 0 )); then
     for pid in "${pids[@]}"; do
       if wait "$pid"; then
         ok "Deleted: ${batch_names[$k]}"
-        (( succeeded++ ))
+        succeeded=$((succeeded + 1))
       else
         err "Failed to delete: ${batch_names[$k]}"
-        (( failed++ ))
+        failed=$((failed + 1))
       fi
-      (( k++ ))
+      k=$((k + 1))
     done
 
     i=$batch_end

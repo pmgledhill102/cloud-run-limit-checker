@@ -84,8 +84,8 @@ ensure_target_vm() {
     until gcloud compute ssh "$VM_NAME" \
             --zone="$ZONE" --tunnel-through-iap --quiet \
             --command='true' &>/dev/null; do
-      (( attempt++ ))
-      if (( attempt > 30 )); then
+      attempt=$((attempt + 1))
+      if [ "$attempt" -gt 30 ]; then
         err "VM did not become reachable via IAP after 30 attempts"
         exit 1
       fi
@@ -98,8 +98,8 @@ ensure_target_vm() {
   local attempt=0
   until gcloud compute scp "$ROOT_DIR/target/target-bin" "${VM_NAME}:~/target" \
           --zone="$ZONE" --tunnel-through-iap --quiet 2>/dev/null; do
-    (( attempt++ ))
-    if (( attempt > 12 )); then
+    attempt=$((attempt + 1))
+    if [ "$attempt" -gt 12 ]; then
       err "SCP failed after ${attempt} attempts"
       exit 1
     fi
@@ -164,18 +164,18 @@ deploy_batch_list() {
   local i=0
   FAILED_NAMES=()
 
-  while (( i < total )); do
-    local batch_end=$(( i + BATCH_SIZE ))
-    if (( batch_end > total )); then
+  while [ "$i" -lt "$total" ]; do
+    local batch_end=$((i + BATCH_SIZE))
+    if [ "$batch_end" -gt "$total" ]; then
       batch_end=$total
     fi
 
-    info "Batch: deploying ${service_names[*]:$i:$(( batch_end - i ))}"
+    info "Batch: deploying ${service_names[*]:$i:$((batch_end - i))}"
 
     local pids=()
     local batch_names=()
     local j=$i
-    while (( j < batch_end )); do
+    while [ "$j" -lt "$batch_end" ]; do
       local name="${service_names[$j]}"
       batch_names+=("$name")
 
@@ -196,7 +196,7 @@ deploy_batch_list() {
         --quiet &
 
       pids+=($!)
-      (( j++ ))
+      j=$((j + 1))
       sleep 1
     done
 
@@ -208,7 +208,7 @@ deploy_batch_list() {
         err "Failed: ${batch_names[$k]}"
         FAILED_NAMES+=("${batch_names[$k]}")
       fi
-      (( k++ ))
+      k=$((k + 1))
     done
 
     i=$batch_end
@@ -235,7 +235,7 @@ deploy_services() {
   local all_names=()
   local skipped=0
   local i=0
-  while (( i < COUNT )); do
+  while [ "$i" -lt "$COUNT" ]; do
     local name
     name=$(service_name "$i")
     local found=false
@@ -246,18 +246,18 @@ deploy_services() {
       fi
     done
     if [[ "$found" == "true" ]]; then
-      (( skipped++ ))
+      skipped=$((skipped + 1))
     else
       all_names+=("$name")
     fi
-    (( i++ ))
+    i=$((i + 1))
   done
 
-  if (( skipped > 0 )); then
+  if [ "$skipped" -gt 0 ]; then
     ok "Skipping ${skipped} already-deployed service(s)"
   fi
 
-  if (( ${#all_names[@]} == 0 )); then
+  if [ "${#all_names[@]}" -eq 0 ]; then
     ok "All ${COUNT} services already deployed"
     return
   fi
@@ -267,8 +267,8 @@ deploy_services() {
 
   local max_retries=3
   local retry=0
-  while (( ${#FAILED_NAMES[@]} > 0 && retry < max_retries )); do
-    (( retry++ ))
+  while [ "${#FAILED_NAMES[@]}" -gt 0 ] && [ "$retry" -lt "$max_retries" ]; do
+    retry=$((retry + 1))
     local retry_list=("${FAILED_NAMES[@]}")
     warn "Retrying ${#retry_list[@]} failed service(s) (attempt ${retry}/${max_retries}) after 30s..."
     sleep 30
@@ -276,9 +276,9 @@ deploy_services() {
   done
 
   local total_failed=${#FAILED_NAMES[@]}
-  local total_ok=$(( COUNT - total_failed ))
+  local total_ok=$((COUNT - total_failed))
   info "Deploy summary: ${total_ok} succeeded, ${total_failed} failed (${COUNT} total)"
-  if (( total_failed > 0 )); then
+  if [ "$total_failed" -gt 0 ]; then
     err "${total_failed} service(s) failed to deploy after ${max_retries} retries"
     return 1
   fi
@@ -290,7 +290,7 @@ fix_iam_bindings() {
 
   local to_fix=()
   local i=0
-  while (( i < COUNT )); do
+  while [ "$i" -lt "$COUNT" ]; do
     local name
     name=$(service_name "$i")
     local policy
@@ -299,10 +299,10 @@ fix_iam_bindings() {
     if [[ "$policy" != *"allUsers"* ]]; then
       to_fix+=("$name")
     fi
-    (( i++ ))
+    i=$((i + 1))
   done
 
-  if (( ${#to_fix[@]} == 0 )); then
+  if [ "${#to_fix[@]}" -eq 0 ]; then
     ok "All services have correct IAM bindings"
     return
   fi
@@ -317,10 +317,10 @@ fix_iam_bindings() {
          --role=roles/run.invoker \
          --quiet &>/dev/null; then
       ok "Fixed IAM: ${name}"
-      (( fixed++ ))
+      fixed=$((fixed + 1))
     else
       err "Failed to fix IAM: ${name}"
-      (( failed++ ))
+      failed=$((failed + 1))
     fi
     sleep 1
   done
@@ -367,10 +367,9 @@ ensure_checker_job() {
 # ── Step 7: Execute checker job ───────────────────────────────────────────────
 run_checker() {
   info "Executing checker job..."
-  gcloud run jobs execute checker \
+  nohup gcloud run jobs execute checker \
     --region "$REGION" \
-    --wait \
-    --quiet
+    --quiet > /dev/null 2>&1 &
   ok "Checker job completed"
 }
 
@@ -387,6 +386,7 @@ fi
 
 if [[ "$SKIP_CHECK" != "true" ]]; then
   ensure_checker_job
+  run_checker
   run_checker
 fi
 
