@@ -202,7 +202,8 @@ gcloud services enable \
   compute.googleapis.com \
   artifactregistry.googleapis.com \
   cloudbuild.googleapis.com \
-  logging.googleapis.com
+  logging.googleapis.com \
+  iap.googleapis.com
 ```
 
 ### 3. VPC and Subnet
@@ -214,8 +215,13 @@ gcloud compute networks create limit-checker-vpc \
 gcloud compute networks subnets create limit-checker-subnet \
   --network=limit-checker-vpc \
   --region=REGION \
-  --range=10.0.0.0/20
+  --range=10.0.0.0/20 \
+  --enable-private-ip-google-access
 ```
+
+Private Google Access is required because the checker job routes all traffic
+through the VPC (`--vpc-egress=all-traffic`) and needs to reach Google APIs
+(Cloud Run Admin API) to list services.
 
 A `/20` subnet provides 4,094 usable IPs. Each Cloud Run instance with Direct
 VPC egress consumes at least one IP from the subnet, so this should support
@@ -224,7 +230,8 @@ behaviour. If testing hits this ceiling, the subnet can be expanded.
 
 ### 4. Firewall Rules
 
-Allow Cloud Run services to reach the target on port 8080:
+Allow Cloud Run services to reach the target on port 8080. If deploying to
+multiple regions with separate subnets, include all subnet CIDR ranges:
 
 ```bash
 gcloud compute firewall-rules create allow-cloudrun-to-target \
